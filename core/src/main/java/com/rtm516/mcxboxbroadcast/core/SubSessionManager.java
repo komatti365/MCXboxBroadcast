@@ -2,6 +2,8 @@ package com.rtm516.mcxboxbroadcast.core;
 
 import com.rtm516.mcxboxbroadcast.core.exceptions.SessionUpdateException;
 import com.rtm516.mcxboxbroadcast.core.models.session.JoinSessionRequest;
+import com.rtm516.mcxboxbroadcast.core.notifications.NotificationManager;
+import com.rtm516.mcxboxbroadcast.core.storage.StorageManager;
 
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -16,11 +18,12 @@ public class SubSessionManager extends SessionManagerCore {
      *
      * @param id The id of the sub-session
      * @param parent The parent session manager
-     * @param cache The directory to store the cached tokens in
+     * @param storageManager The storage manager to use for storing data
+     * @param notificationManager The notification manager to use for sending messages
      * @param logger The logger to use for outputting messages
      */
-    public SubSessionManager(String id, SessionManager parent, String cache, Logger logger) {
-        super(cache, logger.prefixed("Sub-Session " + id));
+    public SubSessionManager(String id, SessionManager parent, StorageManager storageManager, NotificationManager notificationManager, Logger logger) {
+        super(storageManager, notificationManager, logger.prefixed("Sub-Session " + id));
         this.parent = parent;
     }
 
@@ -39,10 +42,10 @@ public class SubSessionManager extends SessionManagerCore {
         // TODO Some form of force flag just in case the master friends list is full
 
         // Add the main account
-        boolean subAdd = friendManager().addIfRequired(parent.getXboxToken().userXUID(), parent.getXboxToken().gamertag());
+        boolean subAdd = friendManager().addIfRequired(parent.getXuid(), parent.getGamertag());
 
         // Get the main account to add us
-        boolean mainAdd = parent.friendManager().addIfRequired(getXboxToken().userXUID(), getXboxToken().gamertag());
+        boolean mainAdd = parent.friendManager().addIfRequired(getXuid(), getGamertag());
 
         return subAdd || mainAdd;
     }

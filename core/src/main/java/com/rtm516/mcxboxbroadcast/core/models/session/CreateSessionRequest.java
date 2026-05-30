@@ -3,31 +3,35 @@ package com.rtm516.mcxboxbroadcast.core.models.session;
 import com.rtm516.mcxboxbroadcast.core.ExpandedSessionInfo;
 
 import java.util.Collections;
+import java.util.Map;
 
 public class CreateSessionRequest extends JoinSessionRequest {
-    public SessionProperties properties;
+    public final SessionProperties properties;
 
-    public CreateSessionRequest(ExpandedSessionInfo sessionInfo) {
+    public CreateSessionRequest(ExpandedSessionInfo sessionInfo, Map<String, String> nonces) {
         super(sessionInfo);
         this.properties = new SessionProperties(new SessionSystemProperties(), new SessionCustomProperties(
             3,
             false,
             "joinable_by_friends",
-            true,
+            false,
             sessionInfo.getMaxPlayers(),
             sessionInfo.getPlayers(),
             true,
-            Collections.singletonList(new Connection(sessionInfo.getIp(), sessionInfo.getPort())),
+            Collections.singletonList(new Connection(sessionInfo.getNetherNetId(), sessionInfo.getPmsgId())),
             0,
-            0,
+            2,
             "level",
             sessionInfo.getHostName(),
             sessionInfo.getXuid(),
-            sessionInfo.getRakNetGUID(),
+            "",
             sessionInfo.getWorldName(),
             "Survival",
             sessionInfo.getProtocol(),
-            sessionInfo.getVersion()
+            sessionInfo.getVersion(),
+            false,
+            false,
+            nonces
         ));
     }
 }

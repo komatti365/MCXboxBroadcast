@@ -1,9 +1,7 @@
 package com.rtm516.mcxboxbroadcast.core.models.session;
 
-import com.rtm516.mcxboxbroadcast.core.ExpandedSessionInfo;
-
-import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 public record SessionCustomProperties(
     int BroadcastSetting,
@@ -13,7 +11,7 @@ public record SessionCustomProperties(
     int MaxMemberCount,
     int MemberCount,
     boolean OnlineCrossPlatformGame,
-    List<Connection>SupportedConnections,
+    List<Connection> SupportedConnections,
     int TitleId,
     int TransportLayer,
     String levelId,
@@ -21,8 +19,11 @@ public record SessionCustomProperties(
     String ownerId,
     String rakNetGUID,
     String worldName,
-    String worldType,
+    String worldType, // Survival, Creative, Adventure
     int protocol,
-    String version
+    String version,
+    boolean isEditorWorld,
+    boolean isHardcore, // If true then shows as hardcore
+    Map<String, String> nonces
 ) {
 }

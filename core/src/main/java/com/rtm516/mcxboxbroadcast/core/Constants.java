@@ -1,30 +1,28 @@
 package com.rtm516.mcxboxbroadcast.core;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec;
+import org.cloudburstmc.protocol.bedrock.codec.v975.Bedrock_v975;
 
 import java.net.URI;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Date;
 
 public class Constants {
-    public static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
-        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
-        .setSerializationInclusion(JsonInclude.Include.NON_NULL)
-        .registerModule(new JavaTimeModule());
-
-    public static final String AUTH_TITLE = "0000000048183522"; // 00000000441cc96b Nintendo Switch, 0000000048183522 Android
-    public static final String SCOPE = "service::user.auth.xboxlive.com::MBI_SSL";
-    public static final String RELAYING_PARTY = "http://xboxlive.com";
+    public static final Gson GSON = new GsonBuilder()
+        .registerTypeAdapter(Instant.class, new InstantConverter())
+        .registerTypeAdapter(Date.class, new DateConverter())
+        .disableHtmlEscaping()
+        .create();
 
     public static final String SERVICE_CONFIG_ID = "4fc10100-5f7a-4470-899b-280835760c07"; // The service config ID for Minecraft
-    public static final String CREATE_SESSION = "https://sessiondirectory.xboxlive.com/serviceconfigs/" + SERVICE_CONFIG_ID + "/sessionTemplates/MinecraftLobby/sessions/%s";
+    public static final String TEMPLATE_NAME = "MinecraftLobby";
+    public static final String TITLE_ID = "896928775"; // The title ID for Minecraft Windows Edition
+    public static final String CREATE_SESSION = "https://sessiondirectory.xboxlive.com/serviceconfigs/" + SERVICE_CONFIG_ID + "/sessionTemplates/" + TEMPLATE_NAME + "/sessions/%s";
     public static final String JOIN_SESSION = "https://sessiondirectory.xboxlive.com/handles/%s/session";
 
-    public static final URI LIVE_DEVICE_CODE_REQUEST = URI.create("https://login.live.com/oauth20_connect.srf");
-    public static final URI LIVE_TOKEN_REQUEST = URI.create("https://login.live.com/oauth20_token.srf");
-    public static final URI DEVICE_AUTHENTICATE_REQUEST = URI.create("https://device.auth.xboxlive.com/device/authenticate");
-    public static final URI XSTS_AUTHENTICATE_REQUEST = URI.create("https://xsts.auth.xboxlive.com/xsts/authorize");
     public static final URI RTA_WEBSOCKET = URI.create("wss://rta.xboxlive.com/connect");
     public static final URI CREATE_HANDLE = URI.create("https://sessiondirectory.xboxlive.com/handles");
 
@@ -33,11 +31,30 @@ public class Constants {
     public static final URI FOLLOWERS = URI.create("https://peoplehub.xboxlive.com/users/me/people/followers");
     public static final URI SOCIAL = URI.create("https://peoplehub.xboxlive.com/users/me/people/social");
     public static final URI SOCIAL_SUMMARY = URI.create("https://social.xboxlive.com/users/me/summary");
+    public static final String FOLLOWER = "https://social.xboxlive.com/users/me/people/follower/xuid(%s)";
+
+    public static final String GALLERY = "https://persona.franchise.minecraft-services.net/api/v1.0/gallery";
+
+    public static final Duration WEBSOCKET_CONNECTION_TIMEOUT = Duration.ofSeconds(10);
 
     /**
-     * From the ConnectionType enum in the game
-     * pre 1.19.10 UPNP was 7
-     * 1.19.10+ UPNP is 6 as a previous entry was removed
+     * Gathered from scraped web requests, seems to use the below enum
+     * https://github.com/LiteLDev/LeviLamina/blob/main/src/mc/network/ConnectionType.h
      */
-    public static int ConnectionTypeUPNP = 6;
+    public static final int ConnectionTypeJsonRpc = 7;
+
+    /**
+     * Used to be 1000, but the limit was increased in Aug 2024
+     */
+    public static final int MAX_FRIENDS = 2000;
+
+    /**
+     * Used for the micro nethernet server that transfers the client to the real server
+     */
+    public static final BedrockCodec BEDROCK_CODEC = Bedrock_v975.CODEC;
+
+    /**
+     * Config version for upgrade purposes
+     */
+    public static final int CONFIG_VERSION = 2;
 }

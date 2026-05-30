@@ -1,32 +1,34 @@
 package com.rtm516.mcxboxbroadcast.core;
 
+import java.math.BigInteger;
 import java.util.Random;
 import java.util.UUID;
 
 public class ExpandedSessionInfo extends SessionInfo {
+    private static final Random RANDOM = new Random();
+
     private String connectionId;
     private String xuid;
     private String rakNetGUID;
     private String sessionId;
     private String handleId;
 
+    private BigInteger netherNetId;
+    private String deviceId;
+    private String pmsgId;
+
     ExpandedSessionInfo(String connectionId, String xuid, SessionInfo sessionInfo) {
         this.connectionId = connectionId;
         this.xuid = xuid;
-
-        StringBuilder str = new StringBuilder();
-        Random random = new Random();
-        for (int i = 0; i < 20; i++) {
-            str.append(random.nextInt(10));
-        }
-        this.rakNetGUID = str.toString();
+        this.rakNetGUID = "";
 
         this.sessionId = UUID.randomUUID().toString();
+        this.netherNetId = BigInteger.valueOf(Math.abs(RANDOM.nextLong()));
+        this.deviceId = UUID.randomUUID().toString();
+        this.pmsgId = null;
 
-        setHostName(sessionInfo.getHostName());
-        setWorldName(sessionInfo.getWorldName());
-        setVersion(sessionInfo.getVersion());
-        setProtocol(sessionInfo.getProtocol());
+        setHostName(sessionInfo.getHostName().isEmpty() ? "MCXboxBroadcast" : sessionInfo.getHostName());
+        setWorldName(sessionInfo.getWorldName().isEmpty() ? getHostName() : sessionInfo.getWorldName());
         setPlayers(sessionInfo.getPlayers());
         setMaxPlayers(sessionInfo.getMaxPlayers());
         setIp(sessionInfo.getIp());
@@ -34,10 +36,8 @@ public class ExpandedSessionInfo extends SessionInfo {
     }
 
     public void updateSessionInfo(SessionInfo sessionInfo) {
-        setHostName(sessionInfo.getHostName());
-        setWorldName(sessionInfo.getWorldName().isEmpty() ? sessionInfo.getHostName() : sessionInfo.getWorldName());
-        setVersion(sessionInfo.getVersion());
-        setProtocol(sessionInfo.getProtocol());
+        setHostName(sessionInfo.getHostName().isEmpty() ? "MCXboxBroadcast" : sessionInfo.getHostName());
+        setWorldName(sessionInfo.getWorldName().isEmpty() ? getHostName() : sessionInfo.getWorldName());
         setPlayers(sessionInfo.getPlayers());
         setMaxPlayers(sessionInfo.getMaxPlayers());
         setIp(sessionInfo.getIp());
@@ -76,11 +76,27 @@ public class ExpandedSessionInfo extends SessionInfo {
         this.sessionId = sessionId;
     }
 
+    public BigInteger getNetherNetId() {
+        return netherNetId;
+    }
+
+    public String getDeviceId() {
+        return deviceId;
+    }
+
     public String getHandleId() {
         return handleId;
     }
 
     public void setHandleId(String handleId) {
         this.handleId = handleId;
+    }
+
+    public String getPmsgId() {
+        return pmsgId;
+    }
+
+    public void setPmsgId(String pmsgId) {
+        this.pmsgId = pmsgId;
     }
 }

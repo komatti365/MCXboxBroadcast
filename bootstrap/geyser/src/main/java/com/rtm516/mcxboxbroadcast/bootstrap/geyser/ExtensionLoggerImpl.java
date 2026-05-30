@@ -4,7 +4,7 @@ import com.rtm516.mcxboxbroadcast.core.Logger;
 import org.geysermc.geyser.api.extension.ExtensionLogger;
 
 public class ExtensionLoggerImpl implements Logger {
-    private ExtensionLogger logger;
+    private final ExtensionLogger logger;
     private final String prefixString;
 
     public ExtensionLoggerImpl(ExtensionLogger logger) {
@@ -22,7 +22,7 @@ public class ExtensionLoggerImpl implements Logger {
     }
 
     @Override
-    public void warning(String message) {
+    public void warn(String message) {
         logger.warning(prefix(message));
     }
 

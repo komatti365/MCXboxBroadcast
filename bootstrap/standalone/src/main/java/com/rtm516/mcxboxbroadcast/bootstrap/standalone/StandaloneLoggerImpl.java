@@ -1,9 +1,12 @@
 package com.rtm516.mcxboxbroadcast.bootstrap.standalone;
 
+import com.rtm516.mcxboxbroadcast.core.BuildData;
 import com.rtm516.mcxboxbroadcast.core.Logger;
 import net.minecrell.terminalconsole.SimpleTerminalConsole;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.config.Configurator;
+
+import java.util.Arrays;
 
 public class StandaloneLoggerImpl extends SimpleTerminalConsole implements Logger {
     private final org.slf4j.Logger logger;
@@ -24,7 +27,7 @@ public class StandaloneLoggerImpl extends SimpleTerminalConsole implements Logge
     }
 
     @Override
-    public void warning(String message) {
+    public void warn(String message) {
         logger.warn(prefix(message));
     }
 
@@ -67,33 +70,47 @@ public class StandaloneLoggerImpl extends SimpleTerminalConsole implements Logge
 
     @Override
     protected void runCommand(String command) {
-        String commandNode = command.split(" ")[0].toLowerCase();
+        String[] parts = command.split(" ");
+        int offset = parts[0].equalsIgnoreCase("mcxboxbroadcast") ? 1 : 0;
+
+        String commandNode = parts[offset].toLowerCase();
+        String[] args = Arrays.copyOfRange(parts, offset + 1, parts.length);
+
         try {
             switch (commandNode) {
-                case "exit" -> System.exit(0);
+                case "stop", "exit" -> System.exit(0);
                 case "restart" -> StandaloneMain.restart();
-                case "dumpsession" -> StandaloneMain.sessionManager.dumpSession();
+                case "dumpsession" -> {
+                    info("Dumping session responses to 'lastSessionResponse.json' and 'currentSessionResponse.json'");
+                    StandaloneMain.sessionManager.dumpSession();
+                }
                 case "accounts" -> {
-                    String[] args = command.split(" ");
-                    if (args.length < 3) {
-                        if (args.length == 2 && args[1].equalsIgnoreCase("list")) {
-                            StandaloneMain.sessionManager.listSessions();
-                            return;
-                        }
-
-                        warning("Usage:");
-                        warning("accounts list");
-                        warning("accounts add/remove <sub-session-id>");
+                    if (args.length == 0) {
+                        warn("Usage:");
+                        warn("accounts list");
+                        warn("accounts add/remove <sub-session-id>");
                         return;
                     }
 
-                    switch (args[1].toLowerCase()) {
-                        case "add" -> StandaloneMain.sessionManager.addSubSession(args[2]);
-                        case "remove" -> StandaloneMain.sessionManager.removeSubSession(args[2]);
-                        default -> warning("Unknown accounts command: " + args[1]);
+                    switch (args[0].toLowerCase()) {
+                        case "list" -> StandaloneMain.sessionManager.listSessions();
+                        case "add" -> StandaloneMain.sessionManager.addSubSession(args[1]);
+                        case "remove" -> StandaloneMain.sessionManager.removeSubSession(args[1]);
+                        default -> warn("Unknown accounts command: " + args[0]);
                     }
                 }
-                default -> warning("Unknown command: " + commandNode);
+                case "version" -> info("MCXboxBroadcast Standalone " + BuildData.VERSION);
+                case "help" -> {
+                    info("Available commands:");
+                    info("exit - Exit the application");
+                    info("restart - Restart the application");
+                    info("dumpsession - Dump the current session to json files");
+                    info("accounts list - List sub-accounts");
+                    info("accounts add <sub-session-id> - Add a sub-account");
+                    info("accounts remove <sub-session-id> - Remove a sub-account");
+                    info("version - Display the version");
+                }
+                default -> warn("Unknown command: " + commandNode);
             }
         } catch (Exception e) {
             error("Failed to execute command", e);

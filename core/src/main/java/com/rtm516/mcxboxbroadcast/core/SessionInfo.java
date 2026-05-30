@@ -1,16 +1,16 @@
 package com.rtm516.mcxboxbroadcast.core;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.rtm516.mcxboxbroadcast.core.configs.CoreConfig;
+
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class SessionInfo {
-    @JsonProperty("host-name")
+    private static final Pattern COLOR_PATTERN = Pattern.compile("\u00A7[\\w]");
+
     private String hostName;
-    @JsonProperty("world-name")
     private String worldName;
-    private String version;
-    private int protocol;
     private int players;
-    @JsonProperty("max-players")
     private int maxPlayers;
     private String ip;
     private int port;
@@ -18,11 +18,18 @@ public class SessionInfo {
     public SessionInfo() {
     }
 
-    public SessionInfo(String hostName, String worldName, String version, int protocol, int players, int maxPlayers, String ip, int port) {
+    public SessionInfo(CoreConfig.SessionConfig.SessionInfo config) {
+        this.hostName = config.hostName();
+        this.worldName = config.worldName();
+        this.players = config.players();
+        this.maxPlayers = config.maxPlayers();
+        this.ip = config.ip();
+        this.port = config.port();
+    }
+
+    public SessionInfo(String hostName, String worldName, int players, int maxPlayers, String ip, int port) {
         this.hostName = hostName;
         this.worldName = worldName;
-        this.version = version;
-        this.protocol = protocol;
         this.players = players;
         this.maxPlayers = maxPlayers;
         this.ip = ip;
@@ -34,7 +41,7 @@ public class SessionInfo {
     }
 
     public void setHostName(String hostName) {
-        this.hostName = hostName;
+        this.hostName = removeColorCodes(hostName);
     }
 
     public String getWorldName() {
@@ -42,26 +49,22 @@ public class SessionInfo {
     }
 
     public void setWorldName(String worldName) {
-        this.worldName = worldName;
+        this.worldName = removeColorCodes(worldName);
     }
 
     public String getVersion() {
-        return version;
-    }
-
-    public void setVersion(String version) {
-        this.version = version;
+        return Constants.BEDROCK_CODEC.getMinecraftVersion();
     }
 
     public int getProtocol() {
-        return protocol;
-    }
-
-    public void setProtocol(int protocol) {
-        this.protocol = protocol;
+        return Constants.BEDROCK_CODEC.getProtocolVersion();
     }
 
     public int getPlayers() {
+        // Allows the join button on 1.21.70 to show up
+        if (players <= 0) {
+            return 1;
+        }
         return players;
     }
 
@@ -70,6 +73,10 @@ public class SessionInfo {
     }
 
     public int getMaxPlayers() {
+        // Prevents the server from showing as full
+        if (maxPlayers <= getPlayers()) {
+            return getPlayers() + 1;
+        }
         return maxPlayers;
     }
 
@@ -91,5 +98,14 @@ public class SessionInfo {
 
     public void setPort(int port) {
         this.port = port;
+    }
+
+    public SessionInfo copy() {
+        return new SessionInfo(hostName, worldName, players, maxPlayers, ip, port);
+    }
+
+    private static String removeColorCodes(String string) {
+        Matcher matcher = COLOR_PATTERN.matcher(string);
+        return matcher.replaceAll("");
     }
 }

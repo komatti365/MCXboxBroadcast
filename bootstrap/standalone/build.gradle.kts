@@ -3,12 +3,11 @@ import com.github.jengelman.gradle.plugins.shadow.transformers.Log4j2PluginsCach
 
 plugins {
     id("com.rtm516.mcxboxbroadcast.shadow-conventions")
+    application
 }
 
 dependencies {
     api(project(":core"))
-    api(libs.bundles.jackson.yaml)
-    api(libs.bedrock.common)
 
     api(libs.terminalconsoleappender) {
         exclude("org.apache.logging.log4j")
@@ -20,14 +19,20 @@ dependencies {
     api(libs.bundles.log4j)
 }
 
-tasks.withType<Jar> {
-    manifest {
-        attributes["Main-Class"] = "com.rtm516.mcxboxbroadcast.bootstrap.standalone.StandaloneMain"
-    }
+application {
+    mainClass.set("com.rtm516.mcxboxbroadcast.bootstrap.standalone.StandaloneMain")
 }
 
 tasks.withType<ShadowJar> {
     transform(Log4j2PluginsCacheFileTransformer())
+    filesMatching("META-INF/org/apache/logging/log4j/core/config/plugins/Log4j2Plugins.dat") {
+        duplicatesStrategy = DuplicatesStrategy.INCLUDE
+    }
+    
+    // Suppress illegal access warnings for webrtc natives
+    manifest {
+        attributes["Enable-Native-Access"] = "ALL-UNNAMED"
+    }
 }
 
 nameJar("MCXboxBroadcastStandalone")

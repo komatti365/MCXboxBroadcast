@@ -1,41 +1,52 @@
 package com.rtm516.mcxboxbroadcast.core;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.github.mizosoft.methanol.Methanol;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
+import com.rtm516.mcxboxbroadcast.core.exceptions.AgeVerificationException;
 import com.rtm516.mcxboxbroadcast.core.exceptions.SessionCreationException;
 import com.rtm516.mcxboxbroadcast.core.exceptions.SessionUpdateException;
 import com.rtm516.mcxboxbroadcast.core.models.session.CreateHandleRequest;
 import com.rtm516.mcxboxbroadcast.core.models.session.CreateHandleResponse;
-import com.rtm516.mcxboxbroadcast.core.models.auth.SISUAuthenticationResponse;
 import com.rtm516.mcxboxbroadcast.core.models.session.SessionRef;
 import com.rtm516.mcxboxbroadcast.core.models.session.SocialSummaryResponse;
-import com.rtm516.mcxboxbroadcast.core.models.auth.XboxTokenInfo;
+import com.rtm516.mcxboxbroadcast.core.notifications.NotificationManager;
+import com.rtm516.mcxboxbroadcast.core.storage.StorageManager;
+import com.rtm516.mcxboxbroadcast.core.nethernet.BroadcasterChannelInitializer;
+import dev.kastle.netty.channel.nethernet.NetherNetChannelFactory;
+import dev.kastle.netty.channel.nethernet.signaling.NetherNetXboxRpcSignaling;
+import dev.kastle.webrtc.PeerConnectionFactory;
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.Channel;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.nio.NioEventLoopGroup;
+import net.raphimc.minecraftauth.bedrock.BedrockAuthManager;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Simple manager to authenticate and create sessions on Xbox
  */
 public abstract class SessionManagerCore {
-    private final LiveTokenManager liveTokenManager;
-    private final XboxTokenManager xboxTokenManager;
+    private final AuthManager authManager;
     private final FriendManager friendManager;
     protected final HttpClient httpClient;
     protected final Logger logger;
     protected final Logger coreLogger;
-    protected final String cache;
+    private final StorageManager storageManager;
+    private final NotificationManager notificationManager;
+    private final GalleryManager galleryManager;
 
     protected RtaWebsocketClient rtaWebsocket;
     protected ExpandedSessionInfo sessionInfo;
@@ -43,32 +54,34 @@ public abstract class SessionManagerCore {
 
     protected boolean initialized = false;
 
+    private Channel netherNetChannel;
+    private EventLoopGroup bossGroup;
+    private EventLoopGroup workerGroup;
+    private NetherNetXboxRpcSignaling signaling;
+
     /**
      * Create an instance of SessionManager
      *
-     * @param cache The directory to store the cached tokens in
+     * @param storageManager The storage manager to use for storing data
+     * @param notificationManager The notification manager to use for sending messages
      * @param logger The logger to use for outputting messages
      */
-    public SessionManagerCore(String cache, Logger logger) {
+    public SessionManagerCore(StorageManager storageManager, NotificationManager notificationManager, Logger logger) {
         this.httpClient = Methanol.newBuilder()
             .version(HttpClient.Version.HTTP_1_1)
             .followRedirects(HttpClient.Redirect.NORMAL)
-            .requestTimeout(Duration.ofMillis(5000))
+            .requestTimeout(Duration.ofMillis(Integer.getInteger("http.request.timeout", 5000)))
             .build();
 
         this.logger = logger;
         this.coreLogger = logger.prefixed("");
-        this.cache = cache;
+        this.storageManager = storageManager;
+        this.notificationManager = notificationManager;
 
-        this.liveTokenManager = new LiveTokenManager(cache, httpClient, logger);
-        this.xboxTokenManager = new XboxTokenManager(cache, httpClient, logger);
+        this.authManager = new AuthManager(notificationManager, storageManager, logger);
 
         this.friendManager = new FriendManager(httpClient, logger, this);
-
-        File directory = new File(cache);
-        if (!directory.exists()) {
-            directory.mkdirs();
-        }
+        this.galleryManager = new GalleryManager(httpClient, logger, this);
     }
 
     /**
@@ -78,6 +91,24 @@ public abstract class SessionManagerCore {
      */
     public FriendManager friendManager() {
         return friendManager;
+    }
+
+    /**
+     * Get the notification manager for this session manager
+     *
+     * @return The notification manager
+     */
+    public NotificationManager notificationManager() {
+        return notificationManager;
+    }
+
+    /**
+     * Get the gallery manager for this session manager
+     *
+     * @return The gallery manager
+     */
+    public GalleryManager galleryManager() {
+        return galleryManager;
     }
 
     /**
@@ -103,43 +134,13 @@ public abstract class SessionManagerCore {
     }
 
     /**
-     * Get the MSA token for the cached user or start the authentication process
+     * Get the Bedrock Auth Manager for the current user.
+     * Starts the auto auth process if not logged in.
      *
-     * @return The fetched MSA token
+     * @return The authenticated BedrockAuthManager
      */
-    protected String getMsaToken() {
-        if (liveTokenManager.verifyTokens()) {
-            return liveTokenManager.getAccessToken();
-        } else {
-            try {
-                return liveTokenManager.authDeviceCode().get();
-            } catch (InterruptedException | ExecutionException e) {
-                logger.error("Failed to get authentication token from device code", e);
-                return "";
-            }
-        }
-    }
-
-    /**
-     * Get the Xbox token information for the current user
-     * If there is no current user then the auto process is started
-     *
-     * @return The information about the Xbox authentication token including the token itself
-     */
-    protected XboxTokenInfo getXboxToken() {
-        if (xboxTokenManager.verifyTokens()) {
-            return xboxTokenManager.getCachedXstsToken();
-        } else {
-            String msaToken = getMsaToken();
-            String deviceToken = xboxTokenManager.getDeviceToken();
-            SISUAuthenticationResponse sisuAuthenticationResponse =  xboxTokenManager.getSISUToken(msaToken, deviceToken);
-            if (sisuAuthenticationResponse == null) {
-                logger.info("SISU authentication response is null, please login again");
-                liveTokenManager.clearTokenCache();
-                return getXboxToken();
-            }
-            return xboxTokenManager.getXSTSToken(sisuAuthenticationResponse);
-        }
+    protected BedrockAuthManager getAuthManager() {
+        return authManager.getManager();
     }
 
     /**
@@ -155,9 +156,22 @@ public abstract class SessionManagerCore {
 
         logger.info("Starting SessionManager...");
 
-        // Make sure we are logged in
-        XboxTokenInfo tokenInfo = getXboxToken();
-        logger.info("Successfully authenticated as " + tokenInfo.gamertag() + " (" + tokenInfo.userXUID() + ")");
+        // Make sure we are logged in and get info
+        try {
+            BedrockAuthManager manager = getAuthManager();
+        } catch (AgeVerificationException e) {
+            logger.error("Authentication failed due to the account requiring age verification. Please login to xbox.com and complete the age verification process, then try again.");
+            logger.error("You can skip it/opt out and continue using the tool, but some features may not work correctly.");
+            shutdown();
+            return;
+        }
+
+        int friendCount = -1;
+        try {
+            friendCount = friendManager.get().size();
+        } catch (Exception ignored) {}
+
+        logger.info("Successfully authenticated as " + getGamertag() + " (" + getXuid() + ") with " + friendCount + "/" + Constants.MAX_FRIENDS + " friends");
 
         if (handleFriendship()) {
             logger.info("Waiting for friendship to be processed...");
@@ -179,6 +193,16 @@ public abstract class SessionManagerCore {
         // Let the user know we are done
         logger.info("Creation of Xbox LIVE session was successful!");
 
+        authManager.setOnDeviceTokenRefreshCallback(() -> {
+            try {
+                logger.debug("Device token refreshed, recreating session...");
+                createSession();
+                logger.debug("Session recreated after device token refresh");
+            } catch (Exception e) {
+                logger.error("Failed to recreate session after device token refresh", e);
+            }
+        });
+
         initialized = true;
     }
 
@@ -197,25 +221,45 @@ public abstract class SessionManagerCore {
      */
     private void createSession() throws SessionCreationException, SessionUpdateException {
         // Get the token for authentication
-        XboxTokenInfo tokenInfo = getXboxToken();
-        String token = tokenInfo.tokenHeader();
+        BedrockAuthManager manager = getAuthManager();
+        String token;
+        try {
+            token = manager.getXboxLiveXstsToken().getUpToDate().getAuthorizationHeader();
+        } catch (Exception e) {
+             throw new SessionCreationException("Failed to get authorization headers: " + e.getMessage());
+        }
 
         // We only need a websocket for the primary session manager
         if (this.sessionInfo != null) {
             // Update the current session XUID
-            this.sessionInfo.setXuid(tokenInfo.userXUID());
+            this.sessionInfo.setXuid(getXuid());
 
             // Create the RTA websocket connection
-            setupWebsocket(token);
+            setupRtaWebsocket();
 
             try {
                 // Wait and get the connection ID from the websocket
-                String connectionId = waitForConnectionId().get();
+                String connectionId = waitForConnectionId();
 
                 // Update the current session connection ID
                 this.sessionInfo.setConnectionId(connectionId);
-            } catch (InterruptedException | ExecutionException e) {
+            } catch (InterruptedException | ExecutionException | TimeoutException e) {
                 throw new SessionCreationException("Unable to get connectionId for session: " + e.getMessage());
+            }
+
+            setupNetherNet();
+
+            if (this.netherNetChannel == null || !this.netherNetChannel.isOpen()) {
+                throw new SessionCreationException("Unable to start NetherNet channel");
+            }
+        }
+
+        // Set the showcase image to the current screenshot
+        File imageFile = storageManager.screenshot();
+        if (imageFile.exists()) {
+            logger.info("Setting showcase image");
+            if (galleryManager.setShowcase(imageFile)) {
+                logger.info("Successfully set showcase image");
             }
         }
 
@@ -228,7 +272,7 @@ public abstract class SessionManagerCore {
             "activity",
             new SessionRef(
                 Constants.SERVICE_CONFIG_ID,
-                "MinecraftLobby",
+                Constants.TEMPLATE_NAME,
                 getSessionId()
             )
         );
@@ -241,9 +285,9 @@ public abstract class SessionManagerCore {
                 .header("Content-Type", "application/json")
                 .header("Authorization", token)
                 .header("x-xbl-contract-version", "107")
-                .POST(HttpRequest.BodyPublishers.ofString(Constants.OBJECT_MAPPER.writeValueAsString(createHandleContent)))
+                .POST(HttpRequest.BodyPublishers.ofString(Constants.GSON.toJson(createHandleContent)))
                 .build();
-        } catch (JsonProcessingException e) {
+        } catch (JsonParseException e) {
             throw new SessionCreationException("Unable to create session handle, error parsing json: " + e.getMessage());
         }
 
@@ -252,10 +296,10 @@ public abstract class SessionManagerCore {
         try {
             createHandleResponse = httpClient.send(createHandleRequest, HttpResponse.BodyHandlers.ofString());
             if (this.sessionInfo != null) {
-                CreateHandleResponse parsedResponse = Constants.OBJECT_MAPPER.readValue(createHandleResponse.body(), CreateHandleResponse.class);
+                CreateHandleResponse parsedResponse = Constants.GSON.fromJson(createHandleResponse.body(), CreateHandleResponse.class);
                 sessionInfo.setHandleId(parsedResponse.id());
             }
-        } catch (IOException | InterruptedException e) {
+        } catch (JsonParseException | IOException | InterruptedException e) {
             throw new SessionCreationException(e.getMessage());
         }
 
@@ -264,7 +308,7 @@ public abstract class SessionManagerCore {
         // Check to make sure the handle was created
         if (createHandleResponse.statusCode() != 200 && createHandleResponse.statusCode() != 201) {
             logger.debug("Failed to create session handle '"  + lastSessionResponse + "' (" + createHandleResponse.statusCode() + ")");
-            throw new SessionCreationException("Unable to create session handle, got status " + createHandleResponse.statusCode() + " trying to create");
+            throw new SessionCreationException("Unable to create session handle, got status " + createHandleResponse.statusCode() + " trying to create: " + createHandleResponse.body());
         }
     }
 
@@ -274,6 +318,15 @@ public abstract class SessionManagerCore {
      * @throws SessionUpdateException If the update fails
      */
     protected abstract void updateSession() throws SessionUpdateException;
+
+    /**
+     * Update the nonces in the session based on the current players
+     *
+     * @throws SessionUpdateException If the update fails
+     */
+    public void updateNonces() throws SessionUpdateException {
+        // Nothing by default
+    }
 
     /**
      * The internal method for making the web request to update the session
@@ -291,9 +344,9 @@ public abstract class SessionManagerCore {
                 .header("Content-Type", "application/json")
                 .header("Authorization", getTokenHeader())
                 .header("x-xbl-contract-version", "107")
-                .PUT(HttpRequest.BodyPublishers.ofString(Constants.OBJECT_MAPPER.writeValueAsString(data)))
+                .PUT(HttpRequest.BodyPublishers.ofString(Constants.GSON.toJson(data)))
                 .build();
-        } catch (JsonProcessingException e) {
+        } catch (JsonParseException e) {
             throw new SessionUpdateException("Unable to update session information, error parsing json: " + e.getMessage());
         }
 
@@ -305,8 +358,8 @@ public abstract class SessionManagerCore {
         }
 
         if (createSessionResponse.statusCode() != 200 && createSessionResponse.statusCode() != 201) {
-            logger.debug("Got update session response: " + createSessionResponse.body());
-            throw new SessionUpdateException("Unable to update session information, got status " + createSessionResponse.statusCode() + " trying to update");
+            logger.info("Got update session response: " + createSessionResponse.body());
+            throw new SessionUpdateException("Unable to update session information, got status " + createSessionResponse.statusCode() + " trying to update: " + createSessionResponse.body());
         }
 
         return createSessionResponse.body();
@@ -317,11 +370,17 @@ public abstract class SessionManagerCore {
      * This should be called before any updates to the session otherwise they might fail
      */
     protected void checkConnection() {
-        if (this.rtaWebsocket != null && !rtaWebsocket.isOpen()) {
+        boolean rtaIsOpen = this.rtaWebsocket != null && this.rtaWebsocket.isOpen();
+        boolean rtcIsOpen = this.netherNetChannel != null && this.netherNetChannel.isOpen();
+
+        // Check if the connection is Lost
+        if (!rtaIsOpen || !rtcIsOpen) {
             try {
-                logger.info("Connection to websocket lost, re-creating session...");
+                logger.warn("Connection to websocket lost, re-creating session...");
+                logger.debug("WebSocket status: RTA Open: " + rtaIsOpen + " RTC Open: " + rtcIsOpen);
+
                 createSession();
-                logger.info("Re-connected!");
+                logger.info("WebSocket session reconnected");
             } catch (SessionCreationException | SessionUpdateException e) {
                 logger.error("Session is dead and hit exception trying to re-create it", e);
             }
@@ -334,7 +393,12 @@ public abstract class SessionManagerCore {
      * @return The formatted XBL3.0 authentication header
      */
     public String getTokenHeader() {
-        return getXboxToken().tokenHeader();
+        try {
+            return getAuthManager().getXboxLiveXstsToken().getUpToDate().getAuthorizationHeader();
+        } catch (Exception e) {
+            logger.error("Failed to get auth header", e);
+            return "";
+        }
     }
 
     /**
@@ -342,29 +406,44 @@ public abstract class SessionManagerCore {
      *
      * @return The received connection ID
      */
-    protected Future<String> waitForConnectionId() {
-        CompletableFuture<String> completableFuture = new CompletableFuture<>();
-
-        Executors.newCachedThreadPool().submit(() -> {
-            while (rtaWebsocket.getConnectionId() == null) {
-                Thread.sleep(100);
-            }
-            completableFuture.complete(rtaWebsocket.getConnectionId());
-
-            return null;
-        });
-
-        return completableFuture;
+    protected String waitForConnectionId() throws InterruptedException, ExecutionException, TimeoutException {
+        return this.rtaWebsocket.getConnectionIdFuture().get(Constants.WEBSOCKET_CONNECTION_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
     }
 
     /**
      * Setup the RTA websocket connection
-     *
-     * @param token The authentication token to use
      */
-    protected void setupWebsocket(String token) {
-        rtaWebsocket = new RtaWebsocketClient(token, logger);
+    protected void setupRtaWebsocket() {
+        if (rtaWebsocket != null) {
+            rtaWebsocket.close();
+        }
+        rtaWebsocket = new RtaWebsocketClient(this);
         rtaWebsocket.connect();
+    }
+
+    protected void setupNetherNet() {
+        shutdownNetherNet();
+
+        long netherNetId = this.sessionInfo.getNetherNetId().longValue();
+
+        this.signaling = new NetherNetXboxRpcSignaling(netherNetId, getMCTokenHeader());
+        this.sessionInfo.setPmsgId(getAuthManager().getMinecraftSession().getCached().getParsedToken().getPayload().reqString("pmid"));
+
+        this.bossGroup = new NioEventLoopGroup(1);
+        this.workerGroup = new NioEventLoopGroup();
+
+        try {
+            ServerBootstrap b = new ServerBootstrap();
+            b.group(bossGroup, workerGroup)
+                .channelFactory(NetherNetChannelFactory.server(new PeerConnectionFactory(), signaling))
+                .childHandler(new BroadcasterChannelInitializer(sessionInfo, this, logger));
+
+            this.netherNetChannel = b.bind(new InetSocketAddress(0)).sync().channel();
+
+            logger.info("NetherNet Broadcaster started on ID: " + netherNetId);
+        } catch (Exception e) {
+            logger.error("Failed to start NetherNet", e);
+        }
     }
 
     /**
@@ -374,7 +453,29 @@ public abstract class SessionManagerCore {
         if (rtaWebsocket != null) {
             rtaWebsocket.close();
         }
+        
+        shutdownNetherNet();
+        
         this.initialized = false;
+    }
+
+    private void shutdownNetherNet() {
+        if (netherNetChannel != null) {
+            netherNetChannel.close();
+            netherNetChannel = null;
+        }
+        if (signaling != null) {
+            signaling.close();
+            signaling = null;
+        }
+        if (bossGroup != null) {
+            bossGroup.shutdownGracefully();
+            bossGroup = null;
+        }
+        if (workerGroup != null) {
+            workerGroup.shutdownGracefully();
+            workerGroup = null;
+        }
     }
 
     /**
@@ -382,7 +483,7 @@ public abstract class SessionManagerCore {
      */
     protected void updatePresence() {
         HttpRequest updatePresenceRequest = HttpRequest.newBuilder()
-            .uri(URI.create(Constants.USER_PRESENCE.formatted(getXboxToken().userXUID())))
+            .uri(URI.create(Constants.USER_PRESENCE.formatted(getXuid())))
             .header("Content-Type", "application/json")
             .header("Authorization", getTokenHeader())
             .header("x-xbl-contract-version", "3")
@@ -423,13 +524,53 @@ public abstract class SessionManagerCore {
             .GET()
             .build();
 
-
         try {
-            return Constants.OBJECT_MAPPER.readValue(httpClient.send(socialSummaryRequest, HttpResponse.BodyHandlers.ofString()).body(), SocialSummaryResponse.class);
-        } catch (IOException | InterruptedException e) {
+            return Constants.GSON.fromJson(httpClient.send(socialSummaryRequest, HttpResponse.BodyHandlers.ofString()).body(), SocialSummaryResponse.class);
+        } catch (JsonParseException | IOException | InterruptedException e) {
             logger.error("Unable to get current friend count", e);
         }
 
         return new SocialSummaryResponse(-1, -1, false, false, false, false, "", -1, -1, "");
+    }
+
+    /**
+     * Get the XUID of the current user
+     *
+     * @return The XUID of the current user
+     */
+    public String getXuid() {
+        return authManager.getXuid();
+    }
+
+    /**
+     * Get the Gamertag of the current user
+     *
+     * @return The Gamertag of the current user
+     */
+    public String getGamertag() {
+        return authManager.getGamertag();
+    }
+
+    /**
+     * Get the current MC token for the session
+     *
+     * @return The current MC token
+     */
+    public String getMCTokenHeader() {
+        try {
+            return getAuthManager().getMinecraftSession().getUpToDate().getAuthorizationHeader();
+        } catch (Exception e) {
+            logger.error("Failed to get MC token header", e);
+            return null;
+        }
+    }
+
+    /**
+     * Get the storage manager for this session manager
+     *
+     * @return The storage manager
+     */
+    public StorageManager storageManager() {
+        return storageManager;
     }
 }
