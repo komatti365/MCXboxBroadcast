@@ -2,7 +2,6 @@ package com.rtm516.mcxboxbroadcast.core;
 
 import com.github.mizosoft.methanol.Methanol;
 import com.google.gson.JsonParseException;
-import com.google.gson.JsonParser;
 import com.rtm516.mcxboxbroadcast.core.exceptions.AgeVerificationException;
 import com.rtm516.mcxboxbroadcast.core.exceptions.SessionCreationException;
 import com.rtm516.mcxboxbroadcast.core.exceptions.SessionUpdateException;
@@ -13,9 +12,11 @@ import com.rtm516.mcxboxbroadcast.core.models.session.SocialSummaryResponse;
 import com.rtm516.mcxboxbroadcast.core.notifications.NotificationManager;
 import com.rtm516.mcxboxbroadcast.core.storage.StorageManager;
 import com.rtm516.mcxboxbroadcast.core.nethernet.BroadcasterChannelInitializer;
-import dev.kastle.netty.channel.nethernet.NetherNetChannelFactory;
-import dev.kastle.netty.channel.nethernet.signaling.NetherNetXboxRpcSignaling;
-import dev.kastle.webrtc.PeerConnectionFactory;
+import org.cloudburstmc.netty.channel.nethernet.NetherNetChannelFactory;
+import org.cloudburstmc.netty.channel.nethernet.config.NetherChannelOption;
+import org.cloudburstmc.netty.channel.nethernet.signaling.NetherNetXboxRpcSignaling;
+import tel.schich.libdatachannel.LibDataChannelArchDetect;
+import tel.schich.libdatachannel.PeerConnectionConfiguration;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.EventLoopGroup;
@@ -58,6 +59,8 @@ public abstract class SessionManagerCore {
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
     private NetherNetXboxRpcSignaling signaling;
+
+    private PeerConnectionConfiguration netherNetPeerConnectionConfig;
 
     /**
      * Create an instance of SessionManager
@@ -366,18 +369,19 @@ public abstract class SessionManagerCore {
     }
 
     /**
-     * Check the connection to the websocket and if its closed re-open it and re-create the session
+     * Check the connections we depend on and if any are down re-open them and re-create the session
      * This should be called before any updates to the session otherwise they might fail
      */
     protected void checkConnection() {
         boolean rtaIsOpen = this.rtaWebsocket != null && this.rtaWebsocket.isOpen();
         boolean rtcIsOpen = this.netherNetChannel != null && this.netherNetChannel.isOpen();
+        boolean signalingIsOpen = this.signaling != null && this.signaling.isActive();
 
         // Check if the connection is Lost
-        if (!rtaIsOpen || !rtcIsOpen) {
+        if (!rtaIsOpen || !rtcIsOpen || !signalingIsOpen) {
             try {
                 logger.warn("Connection to websocket lost, re-creating session...");
-                logger.debug("WebSocket status: RTA Open: " + rtaIsOpen + " RTC Open: " + rtcIsOpen);
+                logger.debug("WebSocket status: RTA Open: " + rtaIsOpen + ", RTC Open: " + rtcIsOpen + ", Signaling: " + signalingIsOpen);
 
                 createSession();
                 logger.info("WebSocket session reconnected");
@@ -421,8 +425,42 @@ public abstract class SessionManagerCore {
         rtaWebsocket.connect();
     }
 
+    /**
+     * Restrict the local UDP port range used for WebRTC (NetherNet) ICE candidates.
+     * Passing 0 for both min and max keeps the transport default (the OS ephemeral
+     * range).
+     *
+     * @param min The lowest UDP port to use, or 0 for the OS default
+     * @param max The highest UDP port to use, or 0 for the OS default
+     */
+    public void setNetherNetPortRange(int min, int max) {
+        if (min <= 0 && max <= 0) {
+            this.netherNetPeerConnectionConfig = null;
+            return;
+        }
+
+        this.netherNetPeerConnectionConfig = PeerConnectionConfiguration.DEFAULT
+            .withPortRangeBegin(min)
+            .withPortRangeEnd(max);
+    }
+
+    /**
+     * @return The peer connection config to use for NetherNet, or null to use
+     *         the transport default
+     */
+    protected PeerConnectionConfiguration netherNetPeerConnectionConfig() {
+        return netherNetPeerConnectionConfig;
+    }
+
     protected void setupNetherNet() {
         shutdownNetherNet();
+
+        try {
+            LibDataChannelArchDetect.initialize();
+        } catch (LinkageError e) {
+            logger.error("Failed to load the libdatachannel native library", e);
+            return;
+        }
 
         long netherNetId = this.sessionInfo.getNetherNetId().longValue();
 
@@ -435,12 +473,17 @@ public abstract class SessionManagerCore {
         try {
             ServerBootstrap b = new ServerBootstrap();
             b.group(bossGroup, workerGroup)
-                .channelFactory(NetherNetChannelFactory.server(new PeerConnectionFactory(), signaling))
+                .channelFactory(NetherNetChannelFactory.server(signaling))
                 .childHandler(new BroadcasterChannelInitializer(sessionInfo, this, logger));
+
+            PeerConnectionConfiguration peerConnectionConfig = netherNetPeerConnectionConfig();
+            if (peerConnectionConfig != null) {
+                b.option(NetherChannelOption.NETHER_PEER_CONNECTION_CONFIG, peerConnectionConfig);
+            }
 
             this.netherNetChannel = b.bind(new InetSocketAddress(0)).sync().channel();
 
-            logger.info("NetherNet Broadcaster started on ID: " + netherNetId);
+            logger.info("NetherNet Broadcaster started on ID: " + netherNetId + (peerConnectionConfig != null ? " (ICE ports " + peerConnectionConfig.portRangeBegin() + "-" + peerConnectionConfig.portRangeEnd() + ")" : ""));
         } catch (Exception e) {
             logger.error("Failed to start NetherNet", e);
         }
